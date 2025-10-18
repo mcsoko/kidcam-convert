@@ -1,0 +1,39 @@
+
+
+name: build-shortcut
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: macos-14
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Verify Shortcut file
+        run: |
+          if [ ! -f "Convert KidCam (HEVC).shortcut" ]; then
+            echo "❌ Convert KidCam (HEVC).shortcut not found in repo root."
+            exit 1
+          fi
+          echo "✅ Found Shortcut file:"
+          ls -lh "Convert KidCam (HEVC).shortcut"
+
+      - name: Compress Shortcut
+        run: |
+          ditto -c -k --keepParent "Convert KidCam (HEVC).shortcut" "Convert-KidCam-HEVC.shortcut.zip"
+          echo "Created Convert-KidCam-HEVC.shortcut.zip"
+          ls -lh Convert-KidCam-HEVC.shortcut.zip
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: Convert-KidCam-HEVC.shortcut.zip
