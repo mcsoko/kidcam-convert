@@ -5,7 +5,7 @@ Batch convert video files from kids camera to modern format
 ` brew install ffmpeg `
 
 ## Instructions
-` python3 kidcam_convert.py --input <dir> --output <dir> `
+` python3 kidcam_convert.py <dir> `
 
 ## macOS Shortcut Usage
 You can also use the macOS Shortcut version as an alternative:

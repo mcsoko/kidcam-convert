@@ -10,12 +10,14 @@ Converts kids' camera clips to Apple-friendly HEVC (.mp4) with:
 
 Usage:
   python3 kidcam_convert.py [inputs ...] [-o OUTPUT] [--recursive] [--hw | --sw] [--verbose]
+  # Shortcut-friendly: if you pass exactly two positional paths (INPUT OUTPUT) and no -o/--output,
+  # the second positional is treated as the output directory.
 
 Inputs:
   Zero or more input directories or files. If none are provided, defaults to ~/Movies/KidCam_Inbox
 
 Options:
-  -o, --output OUTPUT  Output directory (used only when exactly one input is given). If omitted, defaults to <input>-out per input.
+  -o, --output OUTPUT  Output directory (used when exactly one input is given). If omitted, defaults to <input>-out per input.
   --recursive          Recurse into subfolders
   --hw | --sw          Force encoder (otherwise auto-detect)
   --verbose            Show ffmpeg info logs (proves HW path inside ffmpeg logs)
@@ -192,7 +194,7 @@ def convert_file(src: Path, outdir: Path, use_hw: bool, verbose: bool) -> None:
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     # Accept zero or more inputs so Shortcuts can pass multiple paths; default if none provided.
-    ap.add_argument("inputs", nargs="*", help="Input directories or files. If empty, defaults to ~/Movies/KidCam_Inbox")
+    ap.add_argument("inputs", nargs="*", help="Input directories or files. If empty, defaults to ~/Movies/KidCam_Inbox. If exactly two paths are provided and no -o/--output is set, the second path is treated as the output directory (Shortcut-friendly).")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--hw", action="store_true", help="Force hardware encoder (hevc_videotoolbox)")
     g.add_argument("--sw", action="store_true", help="Force software encoder (libx265)")
@@ -207,6 +209,13 @@ def main():
 
     # If exactly one input and an explicit output was provided, use it; otherwise use "<input>-out"
     explicit_outdir: Path | None = Path(args.output).expanduser().resolve() if (args.output and len(inputs) == 1) else None
+
+    # Shortcut-friendly positional OUTPUT:
+    # If there are exactly 2 positional paths and no -o/--output was provided,
+    # treat the second positional as the output directory and keep the first as the sole input.
+    if explicit_outdir is None and len(inputs) == 2:
+        explicit_outdir = inputs[1]
+        inputs = [inputs[0]]
 
     # Decide encoder
     if args.hw:
@@ -237,7 +246,10 @@ def main():
             continue
 
         # Determine output directory for this input
-        outdir = explicit_outdir if explicit_outdir else Path(str(inbox) + "-out")
+        if explicit_outdir:
+            outdir = explicit_outdir
+        else:
+            outdir = Path(str(inbox) + "-out")
         outdir.mkdir(parents=True, exist_ok=True)
 
         # Gather work list
