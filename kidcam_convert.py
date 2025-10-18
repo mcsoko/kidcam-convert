@@ -30,8 +30,27 @@ import platform
 import subprocess
 from datetime import datetime
 from pathlib import Path
+import shutil
+from typing import Optional
 
 os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "")
+
+def find_binary(name: str) -> Optional[str]:
+    """Return absolute path to a binary by checking PATH and common Homebrew locations."""
+    p = shutil.which(name)
+    if p:
+        return p
+    # Common Homebrew locations
+    for cand in (f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}"):
+        if Path(cand).exists():
+            return cand
+    return None
+
+FFMPEG = find_binary("ffmpeg")
+FFPROBE = find_binary("ffprobe")
+if not FFMPEG or not FFPROBE:
+    print("❌ ffmpeg/ffprobe not found. Install with: brew install ffmpeg")
+    exit(1)
 
 # ---------------------------
 # Detection helpers
@@ -41,7 +60,7 @@ def ffmpeg_has_encoder(name: str) -> bool:
     """Return True if ffmpeg lists the given encoder."""
     try:
         out = subprocess.check_output(
-            ["ffmpeg", "-hide_banner", "-v", "0", "-encoders"],
+            [FFMPEG, "-hide_banner", "-v", "0", "-encoders"],
             stderr=subprocess.STDOUT,
             text=True,
         )
@@ -59,7 +78,7 @@ def run_ffprobe(src: Path) -> dict:
     """Run ffprobe to get stream info as dict."""
     try:
         cmd = [
-            "ffprobe",
+            FFPROBE,
             "-v", "error",
             "-print_format", "json",
             "-show_format",
@@ -70,6 +89,18 @@ def run_ffprobe(src: Path) -> dict:
         return json.loads(result.stdout)
     except Exception:
         return {}
+
+def _parse_fps(r_frame_rate: Optional[str]) -> Optional[float]:
+    if not r_frame_rate or r_frame_rate == "0/0":
+        return None
+    try:
+        num, den = r_frame_rate.split("/")
+        num, den = float(num), float(den)
+        if den == 0:
+            return None
+        return round(num / den, 3)
+    except Exception:
+        return None
 
 def analyze_source(src: Path) -> dict:
     """Analyze source video/audio streams and return key attributes."""
@@ -88,6 +119,7 @@ def analyze_source(src: Path) -> dict:
         "height": int(video_stream.get("height")) if video_stream and video_stream.get("height") else None,
         "r_frame_rate": video_stream.get("r_frame_rate") if video_stream else None,
     }
+    video_info["fps"] = _parse_fps(video_info["r_frame_rate"])
 
     audio_info = {
         "codec": audio_stream.get("codec_name") if audio_stream else None,
@@ -118,15 +150,17 @@ def convert_file(src: Path, outdir: Path, use_hw: bool, verbose: bool) -> None:
     video = media_info.get("video", {})
     audio = media_info.get("audio", {})
 
-    print(f"🔍 Detected video codec: {video.get('codec')}, resolution: {video.get('width')}x{video.get('height')}, framerate: {video.get('r_frame_rate')}")
+    print(f"🔍 Detected video codec: {video.get('codec')}, resolution: {video.get('width')}x{video.get('height')}, fps: {video.get('fps')}")
     print(f"🔍 Detected audio codec: {audio.get('codec')}, channels: {audio.get('channels')}, sample rate: {audio.get('sample_rate')}")
 
     loglevel = "info" if verbose else "error"
 
     # Decide if remux or re-encode video
-    # Remux if codec is already hevc (h265) and container is mp4/mov
+    # Remux if codec is already hevc (h265) and container is mp4/mov/m4v
     remux_video = False
-    if video.get("codec") in ("hevc", "hevc_nvenc", "hevc_amf", "hevc_videotoolbox") and src.suffix.lower() in (".mp4", ".mov"):
+    container_ok = src.suffix.lower() in (".mp4", ".mov", ".m4v")
+    # Remux only when video is already HEVC (codec name 'hevc')
+    if video.get("codec") == "hevc" and container_ok:
         remux_video = True
 
     # Decide if remux or re-encode audio
@@ -138,7 +172,7 @@ def convert_file(src: Path, outdir: Path, use_hw: bool, verbose: bool) -> None:
     if remux_video and remux_audio:
         encoder_label = "remux (copy)"
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", loglevel, "-y",
+            FFMPEG, "-hide_banner", "-loglevel", loglevel, "-y",
             "-i", str(src),
             "-map", "0",
             "-c:v", "copy",
@@ -152,7 +186,7 @@ def convert_file(src: Path, outdir: Path, use_hw: bool, verbose: bool) -> None:
         if use_hw:
             encoder_label = "hevc_videotoolbox (HW)"
             cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", loglevel, "-y",
+                FFMPEG, "-hide_banner", "-loglevel", loglevel, "-y",
                 "-i", str(src),
                 "-map", "0",
                 # Hardware encoder (very fast; slightly larger files vs libx265 at same visual quality)
@@ -170,7 +204,7 @@ def convert_file(src: Path, outdir: Path, use_hw: bool, verbose: bool) -> None:
         else:
             encoder_label = "libx265 (SW)"
             cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", loglevel, "-y",
+                FFMPEG, "-hide_banner", "-loglevel", loglevel, "-y",
                 "-i", str(src),
                 "-map", "0",
                 # Software x265 (slower; best compression efficiency)
@@ -211,9 +245,9 @@ def main():
     explicit_outdir: Path | None = Path(args.output).expanduser().resolve() if (args.output and len(inputs) == 1) else None
 
     # Shortcut-friendly positional OUTPUT:
-    # If there are exactly 2 positional paths and no -o/--output was provided,
-    # treat the second positional as the output directory and keep the first as the sole input.
-    if explicit_outdir is None and len(inputs) == 2:
+    # If no -o/--output and there are 2+ positionals, treat the SECOND positional
+    # as the explicit output directory and keep the FIRST as the sole input.
+    if explicit_outdir is None and len(inputs) >= 2:
         explicit_outdir = inputs[1]
         inputs = [inputs[0]]
 
